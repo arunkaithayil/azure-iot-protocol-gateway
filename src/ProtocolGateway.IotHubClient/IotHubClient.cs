@@ -69,7 +69,9 @@ namespace Microsoft.Azure.Devices.ProtocolGateway.IotHubClient
             {
                 throw ComposeIotHubCommunicationException(ex);
             }
-            return new IotHubClient(client, deviceId, settings, allocator, messageAddressConverter);
+            var iotHubClient =  new IotHubClient(client, deviceId, settings, allocator, messageAddressConverter);
+            await iotHubClient.RegisterDirectMethodHandlers();
+            return iotHubClient;
         }
 
         public static Func<IDeviceIdentity, Task<IMessagingServiceClient>> PreparePoolFactory(string baseConnectionString, int connectionPoolSize,
@@ -307,5 +309,76 @@ namespace Microsoft.Azure.Devices.ProtocolGateway.IotHubClient
         {
             return new MessagingException(ex.Message, ex.InnerException, ex.IsTransient, ex.TrackingId);
         }
+
+        private async Task RegisterDirectMethodHandlers()
+        {
+            // Register the direct method handler for the device. This will cause any invocation of 'SendMessageToDevice'
+            // to invoke the handler, which in-turn will route along to the device via MQTT messaging.
+            await this.deviceClient.SetMethodHandlerAsync("SendMessageToDevice", OnSendMessageToDevice, null);
+        }
+
+        // Provides handler for Direct Methods intended as messages to a currently connected device.
+        // The method will deserialize the intended message from the method request and attempt to
+        // send it along via an existing topic.
+        private Task<MethodResponse> OnSendMessageToDevice(MethodRequest methodRequest, object userContext)
+        {
+            int status = 200;
+
+            // Turn this method call into a message.
+            Message message = new Message(methodRequest.Data);
+            IByteBuffer messagePayload = null;
+
+            try
+            {
+                messagePayload = this.allocator.Buffer(methodRequest.Data.Length, methodRequest.Data.Length);
+                messagePayload.WriteBytes(methodRequest.Data);
+
+                var msg = new IotHubClientMessage(message, messagePayload);
+                msg.Properties[TemplateParameters.DeviceIdTemplateParam] = this.deviceId;
+
+                string address;
+                if (!this.messageAddressConverter.TryDeriveAddress(msg, out address))
+                {
+                    messagePayload.Release();
+                    throw new InvalidDataException();
+                }
+
+                msg.Address = address;
+
+                // We're just firing and forgetting the message. From Ford's compat perspective this will
+                // will bypass the message queue and just push the message to the device on the default
+                // mqtt topic. Ford would continue to send the alerts, etc. since they are not changing 
+                // the firmware to consume direct methods through supported channels. However, the usual
+                // feedback channel they use to ensure message delivery may not work out in this case so
+                // we would want a better answer here. Potentially, adding a handler in the Mqtt adapter
+                // that does a variant of HandleMessage and enruing delivery can be used as a proxy for
+                // a pass fail on direct methods that are retrofitted into back-compat this way.
+                this.messagingChannel.Handle(msg);
+
+                message = null; // ownership has been transferred to messagingChannel
+                messagePayload = null;
+            }
+            catch (Exception ex)
+            {
+                // Any error is a failure; probably don’t want to close the channel.
+                this.messagingChannel.Close(ex);
+                status = 500;
+            }
+            finally
+            {
+                message?.Dispose();
+                if (messagePayload != null)
+                {
+                    ReferenceCountUtil.SafeRelease(messagePayload);
+                }
+            }
+
+            string result = "{\"result\":\"Executed: " + methodRequest.Name + "\"}";
+            return Task.FromResult(new MethodResponse(System.Text.Encoding.UTF8.GetBytes(result), status));
+
+            // Should the delegate use async methods then the return value should be as follows. 
+            //return new MethodResponse(System.Text.Encoding.UTF8.GetBytes(result), status);
+        }
+
     }
 }
