@@ -50,6 +50,7 @@ namespace Microsoft.Azure.Devices.ProtocolGateway.Tests
         const string NotificationQoS1Content = "{\"test\": \"notify (at least once)\"}";
         const string NotificationQoS2Content = "{\"test\": \"exactly once\"}";
         const string NotificationQoS2Content2 = "{\"test\": \"exactly once (2)\"}";
+        const string MethodContent = "{\"test\": \"method\"}";
 
         readonly ITestOutputHelper output;
         readonly ISettingsProvider settingsProvider;
@@ -300,6 +301,97 @@ namespace Microsoft.Azure.Devices.ProtocolGateway.Tests
             await this.EnsureDeviceQueueLengthAsync(hubConnectionStringBuilder.HostName, device, 0);
         }
 
+        [Fact]
+        public async Task DeviceMethodTransformationTests()
+        {
+            await this.EnsureServerInitializedAsync();
+
+            int protocolGatewayPort = this.ProtocolGatewayPort;
+
+            string iotHubConnectionString = ConfigurationManager.AppSettings["IotHubClient.ConnectionString"];
+            IotHubConnectionStringBuilder hubConnectionStringBuilder = IotHubConnectionStringBuilder.Create(iotHubConnectionString);
+            bool deviceNameProvided;
+            this.deviceId = ConfigurationManager.AppSettings["End2End.DeviceName"];
+            if (!string.IsNullOrEmpty(this.deviceId))
+            {
+                deviceNameProvided = true;
+            }
+            else
+            {
+                deviceNameProvided = false;
+                this.deviceId = Guid.NewGuid().ToString("N");
+            }
+
+            RegistryManager registryManager = RegistryManager.CreateFromConnectionString(iotHubConnectionString);
+            if (!deviceNameProvided)
+            {
+                await registryManager.AddDeviceAsync(new Device(this.deviceId));
+                this.ScheduleCleanup(async () =>
+                {
+                    await registryManager.RemoveDeviceAsync(this.deviceId);
+                    await registryManager.CloseAsync();
+                });
+            }
+
+            Device device = await registryManager.GetDeviceAsync(this.deviceId);
+            this.deviceSas =
+                new Client.SharedAccessSignatureBuilder
+                {
+                    Key = device.Authentication.SymmetricKey.PrimaryKey,
+                    Target = $"{hubConnectionStringBuilder.HostName}/devices/{this.deviceId}",
+                    KeyName = null,
+                    TimeToLive = TimeSpan.FromMinutes(20)
+                }
+                    .ToSignature();
+
+            ServiceClient serviceClient = ServiceClient.CreateFromConnectionString(iotHubConnectionString);
+
+            Stopwatch sw = Stopwatch.StartNew();
+
+            await this.CleanupDeviceQueueAsync(hubConnectionStringBuilder.HostName, device);
+
+            var clientScenarios = new ClientScenarios(hubConnectionStringBuilder.HostName, this.deviceId, this.deviceSas);
+
+            var group = new MultithreadEventLoopGroup();
+            string targetHost = this.tlsCertificate.GetNameInfo(X509NameType.DnsName, false);
+
+            var readHandler1 = new ReadListeningHandler(CommunicationTimeout);
+            Bootstrap bootstrap = new Bootstrap()
+                .Group(group)
+                .Channel<TcpSocketChannel>()
+                .Option(ChannelOption.TcpNodelay, true)
+                .Handler(this.ComposeClientChannelInitializer(targetHost, readHandler1));
+            IChannel clientChannel = await bootstrap.ConnectAsync(this.ServerAddress, protocolGatewayPort);
+            this.ScheduleCleanup(() => clientChannel.CloseAsync());
+
+            await clientScenarios.ConnectAsync(clientChannel, readHandler1).WithTimeout(TestTimeout);
+            await clientScenarios.SubscribeAsync(clientChannel, readHandler1).WithTimeout(TestTimeout);
+
+            // Send a QoS2 command
+            string qosPropertyName = ConfigurationManager.AppSettings["QoSPropertyName"];
+            var qos2Notification = new Message(Encoding.UTF8.GetBytes(MethodContent));
+            qos2Notification.Properties[qosPropertyName] = "2";
+            qos2Notification.Properties["subTopic"] = "critical-alert";
+            await serviceClient.SendAsync(this.deviceId, qos2Notification);
+
+            var packet = Assert.IsType<PublishPacket>(await readHandler1.ReceiveAsync());
+
+            Assert.Equal($"devices/{this.deviceId}/messages/devicebound", packet.TopicName);
+            Assert.Equal(MethodContent, Encoding.UTF8.GetString(packet.Payload.ToArray()));
+
+            await clientChannel.WriteAndFlushManyAsync(PubAckPacket.InResponseTo(packet), PubRecPacket.InResponseTo(packet));
+
+            var pubRelQoS2Packet2 = Assert.IsAssignableFrom<PubRelPacket>(await readHandler1.ReceiveAsync());
+
+            await clientChannel.WriteAndFlushManyAsync(
+                PubCompPacket.InResponseTo(pubRelQoS2Packet2),
+                DisconnectPacket.Instance);
+
+            this.output.WriteLine($"part 1 completed in {sw.Elapsed}");
+            await this.EnsureDeviceQueueLengthAsync(hubConnectionStringBuilder.HostName, device, 0);
+            this.output.WriteLine($"part 1 clean completed in {sw.Elapsed}");
+        }
+
         async Task EnsureDeviceQueueLengthAsync(string hostname, Device device, int expectedLength)
         {
             await Task.Delay(TimeSpan.FromSeconds(1));
@@ -516,7 +608,7 @@ namespace Microsoft.Azure.Devices.ProtocolGateway.Tests
                 Assert.Equal(expectedPayload, Encoding.UTF8.GetString(packet.Payload.ToArray()));
             }
 
-            async Task ConnectAsync(IChannel channel, ReadListeningHandler readHandler)
+            public async Task ConnectAsync(IChannel channel, ReadListeningHandler readHandler)
             {
                 await channel.WriteAndFlushAsync(new ConnectPacket
                 {
@@ -535,7 +627,7 @@ namespace Microsoft.Azure.Devices.ProtocolGateway.Tests
                 Assert.Equal(ConnectReturnCode.Accepted, connAckPacket.ReturnCode);
             }
 
-            async Task SubscribeAsync(IChannel channel, ReadListeningHandler readHandler)
+            public async Task SubscribeAsync(IChannel channel, ReadListeningHandler readHandler)
             {
                 int subscribePacket1Id = GetRandomPacketId();
                 int subscribePacket2Id = GetRandomPacketId();

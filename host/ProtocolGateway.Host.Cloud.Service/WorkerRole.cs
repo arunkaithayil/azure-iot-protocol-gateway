@@ -64,12 +64,13 @@ namespace ProtocolGateway.Host.Cloud.Service
         {
             var settingsProvider = new RoleEnvironmentSettingsProvider();
 
+            /*
             var eventListener = new ObservableEventListener();
             eventListener.LogToWindowsAzureTable(RoleEnvironment.CurrentRoleInstance.Id, settingsProvider.GetSetting("BlobSessionStatePersistenceProvider.StorageConnectionString"), bufferingInterval: TimeSpan.FromMinutes(2));
             eventListener.EnableEvents(BootstrapperEventSource.Log, EventLevel.Informational);
             eventListener.EnableEvents(CommonEventSource.Log, EventLevel.Informational);
             eventListener.EnableEvents(DefaultEventSource.Log, EventLevel.Informational);
-            
+            */
             int minWorkerThreads;
             int minCompletionPortThreads;
             ThreadPool.GetMinThreads(out minWorkerThreads, out minCompletionPortThreads);
