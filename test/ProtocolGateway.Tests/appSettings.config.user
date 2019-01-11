@@ -2,13 +2,12 @@
   <!-- E2E test settings -->
   <!-- uncomment next line to connect to running protocol gateway deployment instead of starting in-process protocol gateway during test initialization -->
   <!--<add key="End2End.ServerAddress" value="127.0.0.1" />-->
-  <!--<add key="End2End.ServerAddress" value="40.124.49.249" />-->
-  <!--<add key="End2End.ServerAddress" value="104.210.213.49" />-->
+  <add key="End2End.ServerAddress" value="40.124.49.249" />
   <!-- uncomment next line to use an existing device. WARNING: any existing messages in device queue will be completed -->
   <!--<add key="End2End.DeviceName" value="TODO: test device name" />-->
 
   <!-- IoT Hub Client settings -->
-  <add key="IotHubClient.ConnectionString" value="HostName=akstestprod.azure-devices.net;SharedAccessKeyName=iothubowner;SharedAccessKey=RkMVm7s6Bp6XrE6GxuoOhDRxT9ChDyySpqQ/BZZ48oM=" />
+  <add key="IotHubClient.ConnectionString" value="[hubConnString]" />
   <add key="IotHubClient.MaxPendingInboundMessages" value="16" />
   <add key="IotHubClient.MaxPendingOutboundMessages" value="10" />
   <add key="IotHubClient.DefaultPublishToClientQoS" value="1" />
