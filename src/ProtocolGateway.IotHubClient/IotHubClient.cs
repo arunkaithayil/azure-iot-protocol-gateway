@@ -4,6 +4,7 @@
 namespace Microsoft.Azure.Devices.ProtocolGateway.IotHubClient
 {
     using System;
+    using System.Collections.Generic;
     using System.Diagnostics.Contracts;
     using System.IO;
     using System.Threading.Tasks;
@@ -25,6 +26,7 @@ namespace Microsoft.Azure.Devices.ProtocolGateway.IotHubClient
         readonly IByteBufferAllocator allocator;
         readonly IMessageAddressConverter messageAddressConverter;
         IMessagingChannel<IMessage> messagingChannel;
+        readonly Dictionary<string, string> methodMap;
 
         IotHubClient(DeviceClient deviceClient, string deviceId, IotHubClientSettings settings, IByteBufferAllocator allocator, IMessageAddressConverter messageAddressConverter)
         {
@@ -33,6 +35,7 @@ namespace Microsoft.Azure.Devices.ProtocolGateway.IotHubClient
             this.settings = settings;
             this.allocator = allocator;
             this.messageAddressConverter = messageAddressConverter;
+            this.methodMap = new Dictionary<string, string>();
         }
 
         public static async Task<IMessagingServiceClient> CreateFromConnectionStringAsync(string deviceId, string connectionString,
@@ -227,6 +230,12 @@ namespace Microsoft.Azure.Devices.ProtocolGateway.IotHubClient
 
         public async Task AbandonAsync(string messageId)
         {
+            if (messageId.Contains("method"))
+            {
+                return;
+            }
+
+
             try
             {
                 await this.deviceClient.AbandonAsync(messageId);
@@ -239,6 +248,11 @@ namespace Microsoft.Azure.Devices.ProtocolGateway.IotHubClient
 
         public async Task CompleteAsync(string messageId)
         {
+            if (messageId.Contains("method"))
+            {
+                return;
+            }
+
             try
             {
                 await this.deviceClient.CompleteAsync(messageId);
@@ -251,6 +265,11 @@ namespace Microsoft.Azure.Devices.ProtocolGateway.IotHubClient
 
         public async Task RejectAsync(string messageId)
         {
+            if(messageId.Contains("method"))
+            {
+                return;
+            }
+
             try
             {
                 await this.deviceClient.RejectAsync(messageId);
@@ -322,10 +341,14 @@ namespace Microsoft.Azure.Devices.ProtocolGateway.IotHubClient
         // send it along via an existing topic.
         private Task<MethodResponse> OnSendMessageToDevice(MethodRequest methodRequest, object userContext)
         {
+           // return Task.FromResult(new MethodResponse(200));
+
             int status = 200;
 
+            string identifier = "method" + Guid.NewGuid().ToString();
             // Turn this method call into a message.
             Message message = new Message(methodRequest.Data);
+                        
             IByteBuffer messagePayload = null;
 
             try
@@ -333,8 +356,9 @@ namespace Microsoft.Azure.Devices.ProtocolGateway.IotHubClient
                 messagePayload = this.allocator.Buffer(methodRequest.Data.Length, methodRequest.Data.Length);
                 messagePayload.WriteBytes(methodRequest.Data);
 
-                var msg = new IotHubClientMessage(message, messagePayload);
+                var msg = new IotHubTransformedClientMessage(message, messagePayload, identifier, DateTime.UtcNow);
                 msg.Properties[TemplateParameters.DeviceIdTemplateParam] = this.deviceId;
+                msg.Properties["mqtt-qos"] = "2";
 
                 string address;
                 if (!this.messageAddressConverter.TryDeriveAddress(msg, out address))
@@ -345,14 +369,6 @@ namespace Microsoft.Azure.Devices.ProtocolGateway.IotHubClient
 
                 msg.Address = address;
 
-                // We're just firing and forgetting the message. From Ford's compat perspective this will
-                // will bypass the message queue and just push the message to the device on the default
-                // mqtt topic. Ford would continue to send the alerts, etc. since they are not changing 
-                // the firmware to consume direct methods through supported channels. However, the usual
-                // feedback channel they use to ensure message delivery may not work out in this case so
-                // we would want a better answer here. Potentially, adding a handler in the Mqtt adapter
-                // that does a variant of HandleMessage and enruing delivery can be used as a proxy for
-                // a pass fail on direct methods that are retrofitted into back-compat this way.
                 this.messagingChannel.Handle(msg);
 
                 message = null; // ownership has been transferred to messagingChannel

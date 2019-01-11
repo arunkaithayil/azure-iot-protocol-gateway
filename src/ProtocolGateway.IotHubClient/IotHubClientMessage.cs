@@ -10,7 +10,7 @@ namespace Microsoft.Azure.Devices.ProtocolGateway.IotHubClient
     using Microsoft.Azure.Devices.Client;
     using Microsoft.Azure.Devices.ProtocolGateway.Messaging;
 
-    public sealed class IotHubClientMessage : IMessage
+    public class IotHubClientMessage : IMessage
     {
         readonly Message message;
 
@@ -26,9 +26,9 @@ namespace Microsoft.Azure.Devices.ProtocolGateway.IotHubClient
 
         public IByteBuffer Payload { get; }
 
-        public string Id => this.message.LockToken;
+        public virtual string Id => this.message.LockToken;
 
-        public DateTime CreatedTimeUtc => this.message.EnqueuedTimeUtc;
+        public virtual DateTime CreatedTimeUtc => this.message.EnqueuedTimeUtc;
 
         public uint DeliveryCount => this.message.DeliveryCount;
 
