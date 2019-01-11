@@ -235,7 +235,6 @@ namespace Microsoft.Azure.Devices.ProtocolGateway.IotHubClient
                 return;
             }
 
-
             try
             {
                 await this.deviceClient.AbandonAsync(messageId);
@@ -341,8 +340,6 @@ namespace Microsoft.Azure.Devices.ProtocolGateway.IotHubClient
         // send it along via an existing topic.
         private Task<MethodResponse> OnSendMessageToDevice(MethodRequest methodRequest, object userContext)
         {
-           // return Task.FromResult(new MethodResponse(200));
-
             int status = 200;
 
             string identifier = "method" + Guid.NewGuid().ToString();
