@@ -302,6 +302,42 @@ namespace Microsoft.Azure.Devices.ProtocolGateway.Tests
         }
 
         [Fact]
+        public async Task ConnectDisconnectTestAsync()
+        {
+            await this.EnsureServerInitializedAsync();
+            int protocolGatewayPort = this.ProtocolGatewayPort;
+
+            string iotHubConnectionString = ConfigurationManager.AppSettings["IotHubClient.ConnectionString"];
+            IotHubConnectionStringBuilder hubConnectionStringBuilder = IotHubConnectionStringBuilder.Create(iotHubConnectionString);
+
+            var device = await this.SetupDeviceAsync(iotHubConnectionString);
+
+            await this.CleanupDeviceQueueAsync(hubConnectionStringBuilder.HostName, device);
+
+            var clientScenarios = new ClientScenarios(hubConnectionStringBuilder.HostName, this.deviceId, this.deviceSas);
+
+            var group = new MultithreadEventLoopGroup();
+            string targetHost = this.tlsCertificate.GetNameInfo(X509NameType.DnsName, false);
+
+            while(true)
+            {
+                var readHandler1 = new ReadListeningHandler(CommunicationTimeout);
+                Bootstrap bootstrap = new Bootstrap()
+                    .Group(group)
+                    .Channel<TcpSocketChannel>()
+                    .Option(ChannelOption.TcpNodelay, true)
+                    .Handler(this.ComposeClientChannelInitializer(targetHost, readHandler1));
+                IChannel clientChannel = await bootstrap.ConnectAsync(this.ServerAddress, protocolGatewayPort);
+                this.ScheduleCleanup(() => clientChannel.CloseAsync());
+
+                // Connect + Subscribe
+                await clientScenarios.ConnectAsync(clientChannel, readHandler1).WithTimeout(TimeSpan.FromMinutes(10));
+
+                await clientChannel.WriteAndFlushAsync(DisconnectPacket.Instance);
+            }
+        }
+
+        [Fact]
         public async Task Qos2DeviceCommandTestAsync()
         {
             await this.EnsureServerInitializedAsync();
@@ -688,7 +724,7 @@ namespace Microsoft.Azure.Devices.ProtocolGateway.Tests
                     WillMessage = Unpooled.WrappedBuffer(Encoding.UTF8.GetBytes("oops"))
                 });
 
-                var connAckPacket = Assert.IsType<ConnAckPacket>(await readHandler.ReceiveAsync());
+                var connAckPacket = Assert.IsType<ConnAckPacket>(await readHandler.ReceiveAsync(TimeSpan.FromMinutes(10)));
                 Assert.Equal(ConnectReturnCode.Accepted, connAckPacket.ReturnCode);
             }
 
