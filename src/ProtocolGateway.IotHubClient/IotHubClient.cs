@@ -4,6 +4,7 @@
 namespace Microsoft.Azure.Devices.ProtocolGateway.IotHubClient
 {
     using System;
+    using System.Collections.Concurrent;
     using System.Collections.Generic;
     using System.Diagnostics.Contracts;
     using System.IO;
@@ -12,6 +13,7 @@ namespace Microsoft.Azure.Devices.ProtocolGateway.IotHubClient
     using DotNetty.Common.Utilities;
     using Microsoft.Azure.Devices.Client;
     using Microsoft.Azure.Devices.Client.Exceptions;
+    using Microsoft.Azure.Devices.ProtocolGateway.Extensions;
     using Microsoft.Azure.Devices.ProtocolGateway.Identity;
     using Microsoft.Azure.Devices.ProtocolGateway.Instrumentation;
     using Microsoft.Azure.Devices.ProtocolGateway.IotHubClient.Addressing;
@@ -26,7 +28,6 @@ namespace Microsoft.Azure.Devices.ProtocolGateway.IotHubClient
         readonly IByteBufferAllocator allocator;
         readonly IMessageAddressConverter messageAddressConverter;
         IMessagingChannel<IMessage> messagingChannel;
-        readonly Dictionary<string, string> methodMap;
 
         IotHubClient(DeviceClient deviceClient, string deviceId, IotHubClientSettings settings, IByteBufferAllocator allocator, IMessageAddressConverter messageAddressConverter)
         {
@@ -35,7 +36,6 @@ namespace Microsoft.Azure.Devices.ProtocolGateway.IotHubClient
             this.settings = settings;
             this.allocator = allocator;
             this.messageAddressConverter = messageAddressConverter;
-            this.methodMap = new Dictionary<string, string>();
         }
 
         public static async Task<IMessagingServiceClient> CreateFromConnectionStringAsync(string deviceId, string connectionString,
@@ -230,7 +230,7 @@ namespace Microsoft.Azure.Devices.ProtocolGateway.IotHubClient
 
         public async Task AbandonAsync(string messageId)
         {
-            if (messageId.Contains("method"))
+            if(messageId.IsGatewayGenerated())
             {
                 return;
             }
@@ -247,7 +247,7 @@ namespace Microsoft.Azure.Devices.ProtocolGateway.IotHubClient
 
         public async Task CompleteAsync(string messageId)
         {
-            if (messageId.Contains("method"))
+            if (messageId.IsGatewayGenerated())
             {
                 return;
             }
@@ -264,7 +264,7 @@ namespace Microsoft.Azure.Devices.ProtocolGateway.IotHubClient
 
         public async Task RejectAsync(string messageId)
         {
-            if(messageId.Contains("method"))
+            if (messageId.IsGatewayGenerated())
             {
                 return;
             }
@@ -342,7 +342,8 @@ namespace Microsoft.Azure.Devices.ProtocolGateway.IotHubClient
         {
             int status = 200;
 
-            string identifier = "method" + Guid.NewGuid().ToString();
+            string identifier = this.GenerateMessageId();
+
             // Turn this method call into a message.
             Message message = new Message(methodRequest.Data);
                         
@@ -355,6 +356,7 @@ namespace Microsoft.Azure.Devices.ProtocolGateway.IotHubClient
 
                 var msg = new IotHubTransformedClientMessage(message, messagePayload, identifier, DateTime.UtcNow);
                 msg.Properties[TemplateParameters.DeviceIdTemplateParam] = this.deviceId;
+
                 msg.Properties["mqtt-qos"] = "2";
 
                 string address;
@@ -370,6 +372,8 @@ namespace Microsoft.Azure.Devices.ProtocolGateway.IotHubClient
 
                 message = null; // ownership has been transferred to messagingChannel
                 messagePayload = null;
+
+                // TODO : Wait for ack from device
             }
             catch (Exception ex)
             {
@@ -393,5 +397,9 @@ namespace Microsoft.Azure.Devices.ProtocolGateway.IotHubClient
             //return new MethodResponse(System.Text.Encoding.UTF8.GetBytes(result), status);
         }
 
+        string GenerateMessageId()
+        {
+            return string.Format("{0}{1}", Constants.PgGeneratedMessageIdPrefix, Guid.NewGuid());
+        }
     }
 }
